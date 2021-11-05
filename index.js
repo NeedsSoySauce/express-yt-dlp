@@ -1,13 +1,15 @@
-const { spawn } = require('child_process')
-const path = require('path')
-const { unlink, stat, readdir, fstat } = require('fs')
-const express = require('express')
-const asyncHandler = require('express-async-handler')
-const { v4: uuidv4 } = require('uuid')
+import { spawn } from 'child_process'
+import path from 'path'
+import { unlink, stat, readdir } from 'fs'
+import express from 'express'
+import asyncHandler from 'express-async-handler'
+import { v4 as uuidv4 } from 'uuid'
+import fetch from 'node-fetch';
+import parser from 'fast-xml-parser'
 
 const app = express()
 const host = '0.0.0.0'
-const port = 4242
+const port = process.argv[2] || 4242
 
 // See: https://github.com/yt-dlp/yt-dlp#format-selection-examples
 const formats = {
@@ -52,24 +54,25 @@ const download = async (url, options = {}) => {
 
     const args = [
         '-f', formats[opts.format],
-        '-x',
         '-q',
         '-P', opts.outputDirectory,
         '--windows-filenames',
         '--exec', 'echo']
 
     if (opts.format === 'audio') {
-        args.push('--audio-format', 'mp3')
+        args.push('-x', '--audio-format', 'mp3')
     }
 
     args.push(url)
+
+    console.log(`yt-dlp ${args.join(' ')}`)
 
     return new Promise((resolve, reject) => {
         const ytdlp = spawn('yt-dlp', args)
 
         const paths = []
         ytdlp.stdout.on('data', (data) => {
-            process.stdout.write(data)
+            process.stdout.write(`Created ${data}`)
             paths.push(data.toString().trim())
         })
 
@@ -81,6 +84,7 @@ const download = async (url, options = {}) => {
             if (code) {
                 reject()
             } else {
+                console.log(`Created\n\t${paths.join('\n\t')}`)
                 resolve(paths)
             }
         })
@@ -126,7 +130,8 @@ app.get('/', asyncHandler(async (req, res) => {
         return
     }
 
-    const downloadCallback = (err) => deleteFiles(filepaths)
+    // const downloadCallback = (err) => deleteFiles(filepaths)
+    const downloadCallback = (err) => {}
 
     if (filepaths.length > 1) {
         const outputPath = await zip(filepaths)
@@ -187,7 +192,71 @@ const deleteOldFiles = async (directory = DEFAULT_OPTIONS.outputDirectory, milli
     setTimeout(deleteOldFiles, 5000)
 }
 
+const getIP = async () => {
+    const response = await fetch('http://sandbox.needssoysauce.com/api/ip')
+    return response.text()
+}
+
+const encodeQueryString = (items) => {
+    return Object.entries(items).map(kvp => kvp.map(encodeURIComponent).join('=')).join('&')
+}
+
+const updateDdns = async (ip) => {
+    const qs = encodeQueryString({
+        host: process.env.DDNS_HOST,
+        domain: process.env.DDNS_DOMAIN,
+        password: process.env.DDNS_PASSWORD,
+        ip
+    })
+    const url = `https://dynamicdns.park-your-domain.com/update?${qs}`
+    const response = await fetch(url)
+    const text = await response.text()
+    const interfaceResponse = parser.parse(text)['interface-response']
+
+    if (interfaceResponse.ErrCount) {
+        return Promise.reject(interfaceResponse)
+    }
+    return Promise.resolve(interfaceResponse)
+}
+
+const calculateBackoff = (failCount, min = 5000, max = 60000) => {
+    return Math.max(min, Math.min(max, (2 ** failCount - 1) * 500))
+}
+
+const updateIP = async (previousIP = null, minDelayMilliseconds = 5000, maxDelayMilliseconds = 60000, failCount = 0) => {
+    const newIP = await getIP()
+
+    const scheduleUpdate = (isFailure = false) => {
+        const ip = isFailure ? previousIP : newIP
+        const newFailCount = isFailure ? failCount + 1 : 0
+        const delayMilliseconds = calculateBackoff(newFailCount, minDelayMilliseconds, maxDelayMilliseconds)
+        setTimeout(() => {
+            updateIP(ip, minDelayMilliseconds, maxDelayMilliseconds, newFailCount)
+        }, delayMilliseconds)
+        return { newFailCount, delayMilliseconds }
+    }
+
+    if (newIP === previousIP) {
+        scheduleUpdate()
+        return
+    }
+
+    try {
+        await updateDdns(newIP)
+        scheduleUpdate()
+        console.log(`Updated IP to ${newIP}`)
+    } catch (e) {
+        const { newFailCount, delayMilliseconds } = scheduleUpdate(true)
+        console.log(JSON.stringify({
+            message: `Failed to update IP to ${newIP}. Retrying in ${delayMilliseconds} ms.`,
+            delayMilliseconds, 
+            failCount: newFailCount
+        }))
+    }
+}
+
 deleteOldFiles()
+updateIP()
 
 app.listen(port, host, () => {
     console.log(`Listening at http://${host}:${port}`)
