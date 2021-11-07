@@ -26,7 +26,7 @@ const DEFAULT_OPTIONS = {
 const helpText = `This tool can be used to download media.
 
 Example:
-GET /?url=https://www.youtube.com/watch?v=dQw4w9WgXcQ&format=audio
+GET https://ytdl.needssoysauce.com/?url=https://www.youtube.com/watch?v=dQw4w9WgXcQ&format=audio
 
 Query Parameters:
 
@@ -72,7 +72,6 @@ const download = async (url, options = {}) => {
 
         const paths = []
         ytdlp.stdout.on('data', (data) => {
-            process.stdout.write(`Created ${data}`)
             paths.push(data.toString().trim())
         })
 
@@ -84,7 +83,7 @@ const download = async (url, options = {}) => {
             if (code) {
                 reject()
             } else {
-                console.log(`Created\n\t${paths.join('\n\t')}`)
+                console.log(`Downloaded and saved ${paths.length} file(s) to:\n\t${paths.join('\n\t')}`)
                 resolve(paths)
             }
         })
@@ -130,8 +129,7 @@ app.get('/', asyncHandler(async (req, res) => {
         return
     }
 
-    // const downloadCallback = (err) => deleteFiles(filepaths)
-    const downloadCallback = (err) => {}
+    const downloadCallback = (err) => deleteFiles(filepaths)
 
     if (filepaths.length > 1) {
         const outputPath = await zip(filepaths)
@@ -173,7 +171,7 @@ const getFiles = (directory = DEFAULT_OPTIONS.outputDirectory) => {
     })
 }
 
-const deleteOldFiles = async (directory = DEFAULT_OPTIONS.outputDirectory, milliseconds = 300000) => {
+const deleteOldFiles = async (directory = DEFAULT_OPTIONS.outputDirectory, milliseconds = 86400000) => {
     const now = Date.now()
     const files = await getFiles(directory)
     const filepaths = files.map(file => path.join(directory, file))
