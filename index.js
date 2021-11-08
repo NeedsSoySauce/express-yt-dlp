@@ -7,9 +7,14 @@ import { v4 as uuidv4 } from 'uuid'
 import fetch from 'node-fetch';
 import parser from 'fast-xml-parser'
 
-const app = express()
 const host = '0.0.0.0'
 const port = process.argv[2] || 4242
+const app = express()
+
+// See: https://evanhahn.com/gotchas-with-express-query-parsing-and-how-to-avoid-them/
+app.set('query parser', (queryString) => {
+    return new URLSearchParams(queryString)
+})
 
 // See: https://github.com/yt-dlp/yt-dlp#format-selection-examples
 const formats = {
@@ -39,17 +44,19 @@ const zip = async (paths, outputDirectory = DEFAULT_OPTIONS.outputDirectory) => 
         const filename = uuidv4() + '.zip'
         const outputPath = path.join(outputDirectory, filename)
         const ytdlp = spawn('zip', ['-j', outputPath, ...paths])
+        console.log(`Zipping ${paths.length} file(s)`)
         ytdlp.on('close', (code) => {
             if (code) {
                 reject()
             } else {
+                console.log(`Zipped ${paths.length} file(s)`)
                 resolve(outputPath)
             }
         });
     })
 }
 
-const download = async (url, options = {}) => {
+const download = async (urls, options = {}) => {
     const opts = { ...DEFAULT_OPTIONS, ...options }
 
     const args = [
@@ -63,7 +70,7 @@ const download = async (url, options = {}) => {
         args.push('-x', '--audio-format', 'mp3')
     }
 
-    args.push(url)
+    args.push(...urls)
 
     console.log(`yt-dlp ${args.join(' ')}`)
 
@@ -72,7 +79,9 @@ const download = async (url, options = {}) => {
 
         const paths = []
         ytdlp.stdout.on('data', (data) => {
-            paths.push(data.toString().trim())
+            const filepath = data.toString().trim();
+            paths.push(filepath)
+            console.log(`Downloaded and saved ${filepath}`)
         })
 
         ytdlp.stderr.on('data', (data) => {
@@ -100,22 +109,24 @@ const deleteFiles = (paths) => {
 }
 
 app.get('/', asyncHandler(async (req, res) => {
-    let url = req.query.url
+    /** @type {URLSearchParams}  */
+    const qs = req.query;
+    let urls = qs.getAll('url')
     let format = req.query.format ?? DEFAULT_OPTIONS.format
 
-    if (!url) {
+    if (!urls.length) {
         res.status(400).end(helpText)
         return
     }
 
     if (format && !VALID_FORMATS.includes(format)) {
-        res.status(400).end(`Invalid format.`)
+        res.status(400).end(`Invalid format`)
         return
     }
 
-    let href
+    let hrefs
     try {
-        href = new URL(req.query.url).href
+        hrefs = urls.map(url => new URL(url).href)
     } catch (e) {
         res.status(400).end("Invalid URL")
         return
@@ -123,19 +134,20 @@ app.get('/', asyncHandler(async (req, res) => {
 
     let filepaths
     try {
-        filepaths = await download(href, { format })
+        filepaths = await download(hrefs, { format })
     } catch (e) {
-        res.status(400).end("Invalid URL")
+        console.error(`Download failed: ${e}`)
+        res.status(500).end("Download failed")
         return
     }
 
-    const downloadCallback = (err) => deleteFiles(filepaths)
+    const createDownloadCallback = (paths) => (err) => deleteFiles(paths)
 
     if (filepaths.length > 1) {
         const outputPath = await zip(filepaths)
-        res.download(outputPath, downloadCallback)
+        res.download(outputPath, createDownloadCallback([outputPath, ...filepaths]))
     } else {
-        res.download(filepaths[0], downloadCallback)
+        res.download(filepaths[0], createDownloadCallback(filepaths))
     }
 }))
 
@@ -247,7 +259,7 @@ const updateIP = async (previousIP = null, minDelayMilliseconds = 5000, maxDelay
         const { newFailCount, delayMilliseconds } = scheduleUpdate(true)
         console.log(JSON.stringify({
             message: `Failed to update IP to ${newIP}. Retrying in ${delayMilliseconds} ms.`,
-            delayMilliseconds, 
+            delayMilliseconds,
             failCount: newFailCount
         }))
     }
