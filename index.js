@@ -6,6 +6,9 @@ import asyncHandler from 'express-async-handler'
 import { v4 as uuidv4 } from 'uuid'
 import fetch from 'node-fetch';
 import parser from 'fast-xml-parser'
+import os from 'os'
+
+const MAX_REQUEST_SIZE_BYTES = 2e+10;
 
 const host = '0.0.0.0'
 const port = process.argv[2] || 4242
@@ -18,7 +21,7 @@ app.set('query parser', (queryString) => {
 
 // See: https://github.com/yt-dlp/yt-dlp#format-selection-examples
 const formats = {
-    'audio': 'bestaudio',
+    'audio': 'ba/b',
     'video': 'bv+ba/b'
 }
 
@@ -63,6 +66,7 @@ const download = async (urls, options = {}) => {
         '-f', formats[opts.format],
         '-q',
         '-P', opts.outputDirectory,
+        '-N', os.cpus().length * 2,
         '--windows-filenames',
         '--exec', 'echo']
 
@@ -84,19 +88,85 @@ const download = async (urls, options = {}) => {
             console.log(`Downloaded and saved ${filepath}`)
         })
 
+        const stderr = []
         ytdlp.stderr.on('data', (data) => {
-            process.stderr.write(`${data}`)
+            const message = data.toString().trim();
+            stderr.push(message)
+            console.log(message)
         })
 
         ytdlp.on('close', (code) => {
             if (code) {
-                reject()
+                reject(new Error(stderr))
             } else {
                 console.log(`Downloaded and saved ${paths.length} file(s) to:\n\t${paths.join('\n\t')}`)
                 resolve(paths)
             }
         })
     })
+}
+
+const parseNumberOrDefault = (value, fallback = 0) => {
+    const num = Number(value)
+    return isNaN(num) ? fallback : num
+}
+
+const getFilesizes = (urls) => {
+    const args = ['--print', '%(original_url)s %(filesize,filesize_approx)s %(vbr)s %(abr)s %(duration)s']
+
+    args.push(...urls)
+
+    console.log(`yt-dlp ${args.join(' ')}`)
+
+    return new Promise((resolve, reject) => {
+        const ytdlp = spawn('yt-dlp', args)
+
+        const sizes = []
+        ytdlp.stdout.on('data', (data) => {
+            const [url, bytes, vbr, abr, duration] = data.toString().slice(1, -1).split(' ');
+            sizes.push({
+                url,
+                bytes: parseNumberOrDefault(bytes),
+                vbr: parseNumberOrDefault(vbr),
+                abr: parseNumberOrDefault(abr),
+                duration: parseNumberOrDefault(duration)
+            })
+        })
+
+        const stderr = []
+        ytdlp.stderr.on('data', (data) => {
+            const message = data.toString().trim();
+            stderr.push(message)
+            console.log(message)
+        })
+
+        ytdlp.on('close', (code) => {
+            if (code) {
+                reject(new Error(stderr))
+            } else {
+                resolve(sizes)
+            }
+        })
+    })
+}
+
+const getEstimatedDownloadSize = async (urls, options = { defaultBytes: 1e+10, defaultKbps: 80000 }) => {
+    const sizes = await getFilesizes(urls)
+
+    const size = sizes.map(({ url, bytes, vbr, abr, duration }) => {
+        if (bytes) {
+            return bytes
+        } else if ((vbr || abr) && duration) {
+            return ((vbr * duration) + (abr * duration)) * 125
+        } else if (duration) {
+            return options.defaultKbps * duration
+        } else {
+            console.log(`Unable to determine filesize for '${url}', defaulting to ${options.defaultBytes} bytes`)
+            return options.defaultBytes
+        }
+    }).reduce((prev, curr) => prev + curr, 0)
+
+    return size
 }
 
 const deleteFiles = (paths) => {
@@ -132,11 +202,29 @@ app.get('/', asyncHandler(async (req, res) => {
         return
     }
 
+    let size
+    try {
+        size = await getEstimatedDownloadSize(hrefs)
+    } catch (e) {
+        console.error("Failed to check filesizes")
+        console.error(e)
+        res.status(500).end("Download failed")
+        return
+    }
+
+    console.log(`Estimated filesize is ${size} bytes`)
+
+    if (size > MAX_REQUEST_SIZE_BYTES) {
+        res.status(403).end("Request too large")
+        return
+    }
+
     let filepaths
     try {
         filepaths = await download(hrefs, { format })
     } catch (e) {
-        console.error(`Download failed: ${e}`)
+        console.error("Download failed")
+        console.error(e)
         res.status(500).end("Download failed")
         return
     }
