@@ -112,7 +112,7 @@ app.get('/', asyncHandler(async (req, res) => {
     /** @type {URLSearchParams}  */
     const qs = req.query;
     let urls = qs.getAll('url')
-    let format = req.query.format ?? DEFAULT_OPTIONS.format
+    let format = qs.get('format') ?? DEFAULT_OPTIONS.format
 
     if (!urls.length) {
         res.status(400).end(helpText)
