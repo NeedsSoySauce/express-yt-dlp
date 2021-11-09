@@ -178,6 +178,40 @@ const deleteFiles = (paths) => {
     return Promise.all(promises)
 }
 
+const formatBytes = (bytes) => {
+    const breakpoints = [
+        {
+            unit: 'gigabytes (GB)',
+            factor: 1e+9
+        },
+        {
+            unit: 'megabytes (MB)',
+            factor: 1e+6
+        },
+        {
+            unit: 'kilobytes (KB)',
+            factor: 1000
+        },
+        {
+            unit: 'bytes (B)',
+            factor: 1
+        }
+    ]
+
+    let breakpoint = breakpoints.at(-1)
+
+    for (const bp of breakpoints) {
+        if (bytes > bp.factor) {
+            breakpoint = bp;
+            break
+        }
+    }
+
+    const { unit, factor } = breakpoint
+
+    return `${bytes / factor} ${unit}`
+}
+
 app.get('/', asyncHandler(async (req, res) => {
     /** @type {URLSearchParams}  */
     const qs = req.query;
@@ -202,9 +236,9 @@ app.get('/', asyncHandler(async (req, res) => {
         return
     }
 
-    let size
+    let bytes
     try {
-        size = await getEstimatedDownloadSize(hrefs)
+        bytes = await getEstimatedDownloadSize(hrefs)
     } catch (e) {
         console.error("Failed to check filesizes")
         console.error(e)
@@ -212,9 +246,9 @@ app.get('/', asyncHandler(async (req, res) => {
         return
     }
 
-    console.log(`Estimated filesize is ${size} bytes`)
+    console.log(`Estimated download size is ${formatBytes(bytes)}`)
 
-    if (size > MAX_REQUEST_SIZE_BYTES) {
+    if (bytes > MAX_REQUEST_SIZE_BYTES) {
         res.status(403).end("Request too large")
         return
     }
