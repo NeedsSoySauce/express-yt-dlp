@@ -1,12 +1,13 @@
 import { spawn } from 'child_process'
-import path from 'path'
-import { unlink, stat, readdir } from 'fs'
 import express from 'express'
 import asyncHandler from 'express-async-handler'
-import { v4 as uuidv4 } from 'uuid'
-import fetch from 'node-fetch';
 import parser from 'fast-xml-parser'
+import { readdir, stat, unlink } from 'fs'
+import fetch from 'node-fetch'
 import os from 'os'
+import path from 'path'
+import { v4 as uuidv4 } from 'uuid'
+import { WebSocketServer } from 'ws'
 
 const MAX_REQUEST_SIZE_BYTES = 2e+10;
 
@@ -390,6 +391,26 @@ const updateIP = async (previousIP = null, minDelayMilliseconds = 5000, maxDelay
 deleteOldFiles()
 updateIP()
 
-app.listen(port, host, () => {
-    console.log(`Listening at http://${host}:${port}`)
+const server = app.listen({ host, port }, () => {
+    console.log(`Express listening at http://${host}:${port}`)
+})
+
+const wss = new WebSocketServer({ server });
+
+wss.on('connection', (ws, req) => {
+    const remoteAddress = req.headers['x-real-ip'] ?? req.headers['x-forwarded-for'] ?? 'Unknown Address'
+    const remotePort = req.headers['x-forwarded-port'] ?? 'Unknown Port'
+    const from = `${remoteAddress}:${remotePort}`
+    const to = `${req.socket.localAddress}:${req.socket.localPort}`
+    console.log(`${from} connected to ${to}`)
+
+    ws.on('message', (message) => {
+        console.log(`From ${from}: ${message}`);
+    });
+
+    ws.send(`Hi ${from}`);
+});
+
+wss.on('listening', () => {
+    console.log(`WebSocketServer listening at ws://${host}:${port}`)
 })
