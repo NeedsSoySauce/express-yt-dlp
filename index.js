@@ -395,7 +395,10 @@ const server = app.listen({ host, port }, () => {
     console.log(`Express listening at http://${host}:${port}`)
 })
 
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({
+    server,
+    maxPayload: 50000 // 50 KB
+});
 
 wss.on('connection', (ws, req) => {
     const remoteAddress = req.headers['x-real-ip'] ?? req.headers['x-forwarded-for'] ?? 'Unknown Address'
@@ -410,6 +413,10 @@ wss.on('connection', (ws, req) => {
 
     ws.send(`Hi ${from}`);
 });
+
+wss.on('error', (error) => {
+    console.error(error);
+})
 
 wss.on('listening', () => {
     console.log(`WebSocketServer listening at ws://${host}:${port}`)
