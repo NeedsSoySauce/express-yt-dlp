@@ -219,6 +219,10 @@ app.get('/', asyncHandler(async (req, res) => {
     let urls = qs.getAll('url')
     let format = qs.get('format') ?? DEFAULT_OPTIONS.format
 
+    const requestArgs = { qs: qs.toString(), urls, format }
+
+    console.log(`Request ${JSON.stringify(requestArgs, null, 2)}`)
+
     if (!urls.length) {
         res.status(400).end(helpText)
         return
